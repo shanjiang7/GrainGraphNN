@@ -516,7 +516,14 @@ class GrainNN_regressor(nn.Module):
         x_dict['grain'][:, -1]  = grain_change     # ds
         
        # return x_dict
-
+    def get_gradient_dict(self, x_dict):
+        num_joints = x_dict['joint'].size(0)
+        junct_gradient_dict = {
+        i: x_dict['joint'][i, 6:8].clone()  # .clone() to avoid in-place modifications
+        for i in range(num_joints)
+        }
+        return junct_gradient_dict
+    
     def active_window(self, x_coors, geometry_scaling):
 
         near_melt_dist = (x_coors - geometry_scaling['melt_extra'])/(geometry_scaling['melt_right'] - geometry_scaling['melt_extra']) 
@@ -610,6 +617,15 @@ class GrainNN_classifier(torch.nn.Module):
 
         return y_dict
 
+    def get_prob(self,edge_index_dict,y_dict):
+        E_pp = edge_index_dict['joint', 'connect', 'joint']
+        prob = torch.sigmoid(y_dict['edge_event'])
+        src, dst = E_pp[0], E_pp[1]
+        edge_prob_dict = {
+            (int(s.item()), int(d.item())): float(p.item())
+            for s, d, p in zip(src, dst, prob)
+        }
+        return edge_prob_dict
 
     def update(self, x_dict, edge_index_dict, edge_attr, y_dict, mask, geometry_scaling, nucleation_prob):            
             
@@ -779,8 +795,14 @@ class GrainNN_classifier(torch.nn.Module):
                 
                 (site_x, site_y, site_z), delta_z = x_dict['joint'][junction, :3], x_dict['joint'][junction, -1]
                 theta_x, theta_z = torch.rand(2)*torch.pi/2 #torch.tensor([0.001,0.001]) #
-                intro_grain_area = 0.004
-                intro_pq_edge_len = torch.sqrt(intro_grain_area*4/3/torch.sqrt(torch.tensor(3)))
+                center_coor = x_dict['joint'][junction, :2].clone()
+                j_nb0, j_nb1, j_nb2 = E_pp[1, (E_pp[0]==junction).nonzero().view(-1)]
+                len1=eucl_norm(x_dict['joint'][j_nb0,:2], center_coor)/2
+                len2=eucl_norm(x_dict['joint'][j_nb1,:2], center_coor)/2
+                len3=eucl_norm(x_dict['joint'][j_nb2,:2], center_coor)/2
+                intro_grain_area = (3 * torch.sqrt(torch.tensor(3)) / 4) * (len1 * len2 + len2 * len3 + len3 * len1)
+                # intro_grain_area = 0.004
+                # intro_pq_edge_len = torch.sqrt(intro_grain_area*4/3/torch.sqrt(torch.tensor(3)))
                 new_grain = torch.tensor([site_x, site_y, site_z, intro_grain_area, 0, torch.cos(theta_x), torch.sin(theta_x), \
                                           torch.cos(theta_z), torch.sin(theta_z), intro_grain_area, delta_z])
                     
@@ -806,10 +828,13 @@ class GrainNN_classifier(torch.nn.Module):
            
                 new_joint_vec1, new_joint_vec2 = x_dict['joint'][junction].clone(), x_dict['joint'][junction].clone()
             
+                x_dict['joint'][junction,:2] = center_coor + periodic_norm(x_dict['joint'][j_nb0,:2], center_coor)*len1
+                new_joint_vec1[:2] = center_coor + periodic_norm(x_dict['joint'][j_nb1,:2], center_coor)*len2
+                new_joint_vec2[:2] = center_coor + periodic_norm(x_dict['joint'][j_nb2,:2], center_coor)*len3
 
-                x_dict['joint'][junction,:2] = center_coor + periodic_norm(x_dict['joint'][j_nb0,:2], center_coor)*intro_pq_edge_len
-                new_joint_vec1[:2] = center_coor + periodic_norm(x_dict['joint'][j_nb1,:2], center_coor)*intro_pq_edge_len
-                new_joint_vec2[:2] = center_coor + periodic_norm(x_dict['joint'][j_nb2,:2], center_coor)*intro_pq_edge_len
+                # x_dict['joint'][junction,:2] = center_coor + periodic_norm(x_dict['joint'][j_nb0,:2], center_coor)*intro_pq_edge_len
+                # new_joint_vec1[:2] = center_coor + periodic_norm(x_dict['joint'][j_nb1,:2], center_coor)*intro_pq_edge_len
+                # new_joint_vec2[:2] = center_coor + periodic_norm(x_dict['joint'][j_nb2,:2], center_coor)*intro_pq_edge_len
 
                 x_dict['joint'][junction,-2:] = 0
                 new_joint_vec1[-2:] = 0 
@@ -1068,7 +1093,12 @@ def point_in_triangle(t, v1, v2, v3):
     has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
     
     return not (has_neg & has_pos)
+    
+def eucl_norm(p, pc):
+    rel_x = p - pc
+    rel_x = rel_x - 1 * (rel_x > 0.5) + 1 * (rel_x < -0.5) 
 
+    return torch.norm(rel_x, p=2, dim=0)  # Compute L2 norm
 def rotate_two_points(x_p1_p, x_p2_p):
     
     x_p2_p_m = periodic_move(x_p2_p, x_p1_p)

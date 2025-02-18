@@ -252,6 +252,9 @@ class graph:
         self.region_coors = defaultdict(list)
         self.region_edge = defaultdict(set)
         self.region_center = defaultdict(list)
+        self.vertex_coord_to_index= {}
+        self.edge_prob_dict = {}
+        self.junct_gradient_dict={}
 
         self.quadruples = {}
         self.corner_grains = [0, 0, 0, 0]
@@ -608,7 +611,96 @@ class graph:
             assert np.all(self.alpha_field>0), self.seed
    
         self.compute_error_layer()
-     
+    def snap(self,fname='snap'):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        for coors in self.region_coors.values():
+            for i in range(len(coors)):
+                cur = coors[i]
+                nxt = coors[i+1] if i<len(coors)-1 else coors[0]
+                ax.plot([cur[0], nxt[0]], [cur[1], nxt[1]], color='k')
+
+        ax.set_aspect('equal')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.savefig(fname, dpi=300)
+
+    def snap_classifer(self,fname='snap_classifer'):
+        def scale_linewidth(prob, threshold=1e-9, base_width=1, max_width=10, scale_factor=0.4):
+            if prob < threshold:
+                return base_width
+            # Compute the logarithmic scale factor
+            lw = base_width + scale_factor * math.log10(prob / threshold)
+            # Cap the linewidth at max_width
+            return min(lw, max_width)
+        # Create a single subplot (a single axis)
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        for coors in self.region_coors.values():
+            for i in range(len(coors)):
+                cur = coors[i]
+                nxt = coors[i+1] if i<len(coors)-1 else coors[0]
+                
+                if isinstance(cur, np.ndarray):
+                    cur_key = tuple(cur.tolist())
+                elif isinstance(cur, list):
+                    cur_key = tuple(cur)
+                else:
+                    cur_key = cur 
+
+                if isinstance(nxt, np.ndarray):
+                    nxt_key = tuple(nxt.tolist())
+                elif isinstance(nxt, list):
+                    nxt_key = tuple(nxt)
+                else:
+                    nxt_key = nxt
+
+                cur_index = self.vertex_coord_to_index.get(cur_key)
+                nxt_index = self.vertex_coord_to_index.get(nxt_key)
+
+                if cur_index is None or nxt_index is None:
+                    continue
+
+                edge = (min(cur_index, nxt_index), max(cur_index, nxt_index))
+                prob = self.edge_prob_dict.get(edge, 0)
+
+                lw = scale_linewidth(prob, threshold=1e-9)
+
+
+                ax.plot([cur[0], nxt[0]], [cur[1], nxt[1]], color='r', linewidth=lw)
+        
+        ax.set_aspect('equal')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.savefig(fname, dpi=300)
+
+    def show_movement(self,fname='movement'):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for coors in self.region_coors.values():
+            for i in range(len(coors)):
+                cur = coors[i]
+                nxt = coors[i+1] if i<len(coors)-1 else coors[0]
+                ax.plot([cur[0], nxt[0]], [cur[1], nxt[1]], color='r')
+        drawn = set()
+        for coord, idx in self.vertex_coord_to_index.items():
+            if idx in drawn:
+                continue  # Skip if this vertex has already been processed
+            drawn.add(idx)
+            movement = self.junct_gradient_dict.get(idx)
+            if (movement[0]**2 + movement[1]**2) < (0.04**2):
+                continue
+            # if isinstance(movement, torch.Tensor):
+            #     movement = movement.detach().cpu().numpy()
+            ax.arrow(coord[0], coord[1],
+                    movement[0], movement[1],
+                    head_width=0.02, head_length=0.03,
+                    fc='blue', ec='blue')
+    
+        ax.set_aspect('equal')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.savefig(fname, dpi=300)
+
     def show_data_struct(self):
         
 
@@ -667,6 +759,7 @@ class graph:
         self.region_coors.clear()
         self.region_center.clear()
         self.region_edge.clear()
+        self.vertex_coord_to_index.clear()
         region_bound = defaultdict(list)
         
         for k, v in self.joint2vertex.items():
@@ -675,6 +768,14 @@ class graph:
                 self.regions[region].append(v)
                 
                 self.region_coors[region].append(self.vertices[v])
+
+                coord = self.vertices[v]
+                if isinstance(coord, np.ndarray):
+                    coord = tuple(coord.tolist())
+                elif isinstance(coord, list):
+                    coord = tuple(coord)
+                # Store the mapping: key = coordinate, value = vertex index
+                self.vertex_coord_to_index[coord] = v
         cnt = 0
         edge_count = 0
 

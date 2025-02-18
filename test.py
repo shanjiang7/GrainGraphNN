@@ -304,7 +304,7 @@ if __name__=='__main__':
             
             if args.growth_height>0:
                 traj.final_height = traj.ini_height + args.growth_height
-            traj.frames = int( (traj.final_height - traj.ini_height)/train_delta_z ) + 1
+            traj.frames = int( (traj.final_height - traj.ini_height)/train_delta_z ) + 1-72
             
 
             geometry_scaling = {'domain_offset':0, 'domain_factor':traj.lxd/traj.patch_size}
@@ -354,6 +354,8 @@ if __name__=='__main__':
                 
                 print('******* prediction progress %1.2f/1.0 ********'%(frame/(traj.frames - 1)))
                 height = traj.ini_height + frame*train_delta_z
+                if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                    traj.snap('snap_before')
                 
                 """
                 <1> combine predictions from regressor and classifier
@@ -405,9 +407,13 @@ if __name__=='__main__':
                 if data.x_dict['grain'][0, 2] > train_frames/(train_frames + 1):
                     data.x_dict['grain'][:, 2] = train_frames/(train_frames + 1)         
                     data.x_dict['joint'][:, 2] = train_frames/(train_frames + 1)
-                
-                    
-
+                if args.save_fig>1 and frame%((traj.frames - 1)//(args.save_fig-1))==0:
+                    traj.edge_prob_dict=Cmodel.get_prob(data.edge_index_dict,pred)
+                    traj.snap_classifer('class_before')
+                    traj.junct_gradient_dict=Rmodel.get_gradient_dict(data.x_dict)
+                    traj.show_movement('vertex changes')                
+                print(data.x_dict['joint'][10:20,6:8])
+                print(len(traj.vertex_coord_to_index))
                 
                 """
                 <3> predict events and update features and connectivity
@@ -575,6 +581,8 @@ if __name__=='__main__':
                     data.edge_attr_dict[edge_type] = rel_loc
  
                 prev_X, prev_mask, prev_edge_index_dict = {k:v.clone() for k, v in X.items()}, {k:v.clone() for k, v in data['mask'].items()}, {k:v.clone() for k, v in data.edge_index_dict.items()}
+                if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                    traj.snap('snap_after')
                 
             end_time = time.time()
             print('inference time for seed %d'%grain_seed, end_time - start_time)            
