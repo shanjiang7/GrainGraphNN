@@ -12,6 +12,7 @@ import PIL.Image as Image
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
+import matplotlib.patches as patches
 from matplotlib.colors import ListedColormap
 plt.rcParams.update({'font.size': 24})
 coolwarm = cm.get_cmap('coolwarm', 256)
@@ -27,6 +28,7 @@ from math import pi
 from collections import defaultdict
 import math
 import argparse
+import networkx as nx
 from user_generate import user_defined_config
 
 def angle_norm(angular):
@@ -252,7 +254,9 @@ class graph:
         self.region_coors = defaultdict(list)
         self.region_edge = defaultdict(set)
         self.region_center = defaultdict(list)
-        self.vertex_coord_to_index= {}
+        self.vertex_coord_to_index = {}
+        self.index_to_vertex_coord = {}
+        self.elim_grain_to_vertices={}
         self.edge_prob_dict = {}
         self.junct_gradient_dict={}
 
@@ -625,8 +629,93 @@ class graph:
         ax.set_yticks([])
         plt.savefig(fname, dpi=300)
 
+    def check_planar(self, edge_index_dict):
+        def plot_edges(self, edges):
+            for u, v in edges:
+                # Retrieve coordinates from self.vertices
+                coord_u = self.vertices[u]
+                coord_v = self.vertices[v]
+                # Plot the edge between the two coordinates
+                plt.plot([coord_u[0], coord_v[0]], [coord_u[1], coord_v[1]], 'k-')
+            plt.title("Graph Plot")
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.savefig('planar_graph.png',dpi=600)
+
+        E_pp = edge_index_dict['joint', 'connect', 'joint']
+        G=nx.Graph()
+        for v,coord in self.vertices.items():
+            G.add_node(v, pos=coord)
+        unique_edges = set()
+        num_edges = E_pp.shape[1]
+        for i in range(num_edges):
+            src = int(E_pp[0, i].item())
+            dst = int(E_pp[1, i].item())
+            if(math.sqrt((self.vertices[src][0]-self.vertices[dst][0])**2+(self.vertices[dst][1]-self.vertices[src][1])**2)>0.8):
+                continue
+            edge = (min(src, dst), max(src, dst))
+            unique_edges.add(edge)
+        
+        for edge in unique_edges:
+            G.add_edge(*edge)
+
+        is_planar,embedding =nx.check_planarity(G,counterexample=True)
+        #plot_edges(self,counterexample.edges())
+        if is_planar:
+            pos = nx.spring_layout(G)
+            nx.draw(G, pos, with_labels=True)
+            plt.savefig('planar_graph.png',dpi=600)
+
+
+        # if not is_planar:
+        #     print("counterexample:",counterexample.edges())
+        #     pos = nx.spring_layout(counterexample)
+        #     nx.draw(counterexample, pos, with_labels=True)
+        #     plt.savefig('planar_graph.png',dpi=600)
+
+        print("Graph is planar:", is_planar)
+    
     def snap_classifer(self,fname='snap_classifer'):
-        def scale_linewidth(prob, threshold=1e-9, base_width=1, max_width=10, scale_factor=0.4):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        def sort_polygon(coords):
+            cx = sum([p[0] for p in coords]) / len(coords)
+            cy = sum([p[1] for p in coords]) / len(coords)
+            
+            # Sort the points by the angle they make with the centroid
+            sorted_coords = sorted(coords, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+            return sorted_coords
+        color = 'blue'
+        alpha = 0.5
+        print('elimgrains',self.elim_grain_to_vertices.items())
+        for grain, vertex_indices in self.elim_grain_to_vertices.items():
+            # Get coordinates for all vertices of this grain.
+            coords = [self.index_to_vertex_coord[v] for v in vertex_indices]
+            
+            # Check we have enough points
+            if len(coords) < 3:
+                continue
+            
+            ref=coords[0]
+            # ref = None
+            # for coord in coords:
+            #     if coord[0] > 0.5 and coord[1] > 0.5:
+            #         ref = coord
+            #         break
+            # if ref is None:
+            #     ref = coords[0] 
+
+            # Adjust every coordinate so that it is in the same periodic cell as the reference.
+            adjusted_coords = [periodic_move(coord, ref) for coord in coords]
+            
+            # Now sort the adjusted coordinates into a proper polygon order.
+            sorted_coords = sort_polygon(adjusted_coords)  # Assume sort_polygon is defined elsewhere
+            
+            # Create a polygon patch from the sorted coordinates
+            polygon = patches.Polygon(sorted_coords, closed=True,
+                                    facecolor=color, edgecolor='black', alpha=alpha)
+            ax.add_patch(polygon)
+
+        def scale_linewidth(prob, threshold=1e-8, base_width=1, max_width=10, scale_factor=0.25):
             if prob < threshold:
                 return base_width
             # Compute the logarithmic scale factor
@@ -634,7 +723,6 @@ class graph:
             # Cap the linewidth at max_width
             return min(lw, max_width)
         # Create a single subplot (a single axis)
-        fig, ax = plt.subplots(figsize=(8, 6))
         
         for coors in self.region_coors.values():
             for i in range(len(coors)):
@@ -659,12 +747,12 @@ class graph:
                 nxt_index = self.vertex_coord_to_index.get(nxt_key)
 
                 if cur_index is None or nxt_index is None:
-                    continue
+                    prob=0
+                else:
+                    edge = (min(cur_index, nxt_index), max(cur_index, nxt_index))
+                    prob = self.edge_prob_dict.get(edge, 0)
 
-                edge = (min(cur_index, nxt_index), max(cur_index, nxt_index))
-                prob = self.edge_prob_dict.get(edge, 0)
-
-                lw = scale_linewidth(prob, threshold=1e-9)
+                lw = scale_linewidth(prob, threshold=1e-8)
 
 
                 ax.plot([cur[0], nxt[0]], [cur[1], nxt[1]], color='r', linewidth=lw)
@@ -760,6 +848,7 @@ class graph:
         self.region_center.clear()
         self.region_edge.clear()
         self.vertex_coord_to_index.clear()
+        self.index_to_vertex_coord.clear()
         region_bound = defaultdict(list)
         
         for k, v in self.joint2vertex.items():
@@ -776,6 +865,7 @@ class graph:
                     coord = tuple(coord)
                 # Store the mapping: key = coordinate, value = vertex index
                 self.vertex_coord_to_index[coord] = v
+                self.index_to_vertex_coord[v]=coord
         cnt = 0
         edge_count = 0
 

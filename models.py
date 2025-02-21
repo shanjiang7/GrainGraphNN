@@ -626,6 +626,41 @@ class GrainNN_classifier(torch.nn.Module):
             for s, d, p in zip(src, dst, prob)
         }
         return edge_prob_dict
+    
+    def get_elimin_grain_vertex(self,edge_index_dict,y_dict,geometry_scaling):
+        E_pp = edge_index_dict['joint', 'connect', 'joint']
+        E_pq = edge_index_dict['joint', 'pull', 'grain']
+        elim_grain_to_vet={}
+        for grain in y_dict['grain_event']:
+            
+            if grain not in geometry_scaling['active_grains']:continue
+            Np = E_pq[0][(E_pq[1]==grain).nonzero().view(-1)]
+            vertex_set = set(Np.tolist())
+            elim_grain_to_vet[grain]=vertex_set
+        return elim_grain_to_vet
+
+            # all_in_bound = True
+            # for p in Np:
+            #     if p not in geometry_scaling['active_joints']: 
+            #         all_in_bound = False
+            # if not all_in_bound: continue
+            
+            # if len(Np)==0:
+            #     continue
+            
+            # pairs = torch.combinations(Np, r=2)
+
+            # elim_edge = []                
+            # for p1, p2 in pairs:
+                
+            #     if p1>p2:
+            #         p1, p2 = p2, p1
+            #     E_index = ((E_pp[0]==p1)&(E_pp[1]==p2)).nonzero().view(-1)
+            #     if len(E_index)>0:
+            #         # print(p1, p2)
+            #         elim_edge.append(E_index)
+            # elim_edge = torch.cat(elim_edge)
+            # print('grain', grain, 'edge',elim_edge, 'junction',Np)
 
     def update(self, x_dict, edge_index_dict, edge_attr, y_dict, mask, geometry_scaling, nucleation_prob):            
             

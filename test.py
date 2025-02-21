@@ -85,7 +85,7 @@ if __name__=='__main__':
     parser.add_argument("--interp_frames", type=int, default=0)    
     parser.add_argument("--save_fig", type=int, default=2)
     parser.add_argument("--reconst_mesh_size", type=float, default=0.08) 
-    parser.add_argument("--nucleation_density", type=float, default=0.00)
+    parser.add_argument("--nucleation_density", type=float, default=0.001)
 
     parser.add_argument("--temporal", dest='temporal', action='store_true')
     parser.set_defaults(temporal=False)
@@ -295,6 +295,7 @@ if __name__=='__main__':
             X = {k:v.clone() for k, v in data.x_dict.items()}
             prev_X, prev_mask, prev_edge_index_dict = {k:v.clone() for k, v in X.items()}, {k:v.clone() for k, v in data['mask'].items()}, {k:v.clone() for k, v in data.edge_index_dict.items()}
             traj.GNN_update(0, X, data['mask'], True, data.edge_index_dict, args.compare)
+            traj.check_planar(prev_edge_index_dict)
             if args.plot:
                 traj.show_data_struct()
                 
@@ -304,7 +305,7 @@ if __name__=='__main__':
             
             if args.growth_height>0:
                 traj.final_height = traj.ini_height + args.growth_height
-            traj.frames = int( (traj.final_height - traj.ini_height)/train_delta_z ) + 1-72
+            traj.frames = int( (traj.final_height - traj.ini_height)/train_delta_z ) + 1-84
             
 
             geometry_scaling = {'domain_offset':0, 'domain_factor':traj.lxd/traj.patch_size}
@@ -356,6 +357,7 @@ if __name__=='__main__':
                 height = traj.ini_height + frame*train_delta_z
                 if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
                     traj.snap('snap_before')
+                traj.check_planar(data.edge_index_dict)
                 
                 """
                 <1> combine predictions from regressor and classifier
@@ -407,13 +409,7 @@ if __name__=='__main__':
                 if data.x_dict['grain'][0, 2] > train_frames/(train_frames + 1):
                     data.x_dict['grain'][:, 2] = train_frames/(train_frames + 1)         
                     data.x_dict['joint'][:, 2] = train_frames/(train_frames + 1)
-                if args.save_fig>1 and frame%((traj.frames - 1)//(args.save_fig-1))==0:
-                    traj.edge_prob_dict=Cmodel.get_prob(data.edge_index_dict,pred)
-                    traj.snap_classifer('class_before')
-                    traj.junct_gradient_dict=Rmodel.get_gradient_dict(data.x_dict)
-                    traj.show_movement('vertex changes')                
-                print(data.x_dict['joint'][10:20,6:8])
-                print(len(traj.vertex_coord_to_index))
+            
                 
                 """
                 <3> predict events and update features and connectivity
@@ -427,6 +423,12 @@ if __name__=='__main__':
                 if traj.BC == 'noflux': # the grain 0 here is boundary grain
                     pred['grain_event'] = pred['grain_event'][pred['grain_event']!=0]
                 
+                if args.save_fig>1 and frame%((traj.frames - 1)//(args.save_fig-1))==0:
+                    traj.edge_prob_dict=Cmodel.get_prob(data.edge_index_dict,pred)
+                    traj.elim_grain_to_vertices=Cmodel.get_elimin_grain_vertex(data.edge_index_dict,pred, geometry_scaling)
+                    traj.snap_classifer('class_before')
+                    # traj.junct_gradient_dict=Rmodel.get_gradient_dict(data.x_dict)
+                    # traj.show_movement('vertex changes')    
                 nucleation_prob = args.nucleation_density*traj.lxd*traj.lxd*train_delta_z/data['mask']['joint'].sum()
                 print('nucleation probability for each junction: ', nucleation_prob)
                 data.x_dict, data.edge_index_dict, pairs = Cmodel.update(data.x_dict, data.edge_index_dict, data.edge_attr_dict, pred, data['mask'], geometry_scaling, nucleation_prob)
@@ -476,11 +478,11 @@ if __name__=='__main__':
               #  print('connectivity error of the graph: pp edge %f, pq edge %f'%(pp_err, pq_err))
                 X = {k:v.clone() for k, v in data.x_dict.items()}
                 if geometry_scaling['domain_factor']>1:
-                    
                     X['joint'][:,:2] =  (X['joint'][:,:2] + geometry_scaling['domain_offset'])/geometry_scaling['domain_factor']
                     
 
-                
+                if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                    traj.snap('snap_mid')
                 traj.GNN_update(frame, X, data['mask'], topo, data.edge_index_dict, args.compare)
                 
                 if hasattr(traj, 'train_test_frame_ratio'):
