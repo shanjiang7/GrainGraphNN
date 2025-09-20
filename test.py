@@ -85,7 +85,10 @@ if __name__=='__main__':
     parser.add_argument("--interp_frames", type=int, default=0)    
     parser.add_argument("--save_fig", type=int, default=2)
     parser.add_argument("--reconst_mesh_size", type=float, default=0.08) 
-    parser.add_argument("--nucleation_density", type=float, default=0.001)
+    parser.add_argument("--nucleation_density", type=float, default=0.000)
+
+    parser.add_argument("--continue_from", type=str, default=None, 
+                    help="Path to a previously saved final state to continue from")
 
     parser.add_argument("--temporal", dest='temporal', action='store_true')
     parser.set_defaults(temporal=False)
@@ -127,33 +130,79 @@ if __name__=='__main__':
     
 
     print('************ setup data ***********')
+    class GraphSample:
+        def __init__(self):
+            # Attributes used by DynamicHeteroGraphTemporalSignal
+            self.edge_index_dicts = {}
+            self.edge_weight_dicts = {}
+            self.feature_dicts = {}
+            self.target_dicts = {}
+            self.mask = {}
+            self.additional_features = {}
+            self.physical_params = {}
+            
+            # Additional attributes used directly by other parts of the code
+            self.features = {}
+            self.targets = {}
 
+
+    if args.continue_from:
+        # Load the previously saved final state
+        with open(args.continue_from, 'rb') as inp:
+            final_state = dill.load(inp)
         
-    
+        # Load a real sample first to see its structure
+        datasets = sorted(glob.glob(args.truth_dir + 'seed' + args.seed + '_G*.pkl'))
+        with open(datasets[0], 'rb') as inp:  
+            real_sample = dill.load(inp)[0]
+        
+        # Create a custom sample
+        custom_sample = GraphSample()
+        
+        # Copy features and targets from real sample
+        custom_sample.features = real_sample.features
+        custom_sample.targets = real_sample.targets
+        
+        # Fill in the data attributes
+        custom_sample.feature_dicts = {k: v for k, v in final_state['x_dict'].items()}
+        custom_sample.edge_index_dicts = {k: v for k, v in final_state['edge_index_dict'].items()}
+        custom_sample.edge_weight_dicts = {k: v for k, v in final_state['edge_attr_dict'].items()}
+        custom_sample.mask = {k: v for k, v in final_state['mask'].items()}
+        
+        if 'physical_params' in final_state:
+            custom_sample.physical_params = final_state['physical_params']
+        
+        # Use this custom sample
+        test_list = [custom_sample]
+        test_tensor = DynamicHeteroGraphTemporalSignal(test_list)
+        heteroData = test_tensor[0]
+        sample = test_list[0]
+        num_test = 1
+    else:
     
             
-    datasets = sorted(glob.glob(args.truth_dir + 'seed' + args.seed + '_G*.pkl'))
+        datasets = sorted(glob.glob(args.truth_dir + 'seed' + args.seed + '_G*.pkl'))
 
-    test_list = []
-    for case in datasets:
-        with open(case, 'rb') as inp:  
-            try:
-                test_list = test_list + [dill.load(inp)[0]]
-            except:
-                raise EOFError
+        test_list = []
+        for case in datasets:
+            with open(case, 'rb') as inp:  
+                try:
+                    test_list = test_list + [dill.load(inp)[0]]
+                except:
+                    raise EOFError
+                
+        sample = test_list[0]
+
+        if args.use_sample != 'all':
             
-    sample = test_list[0]
+            test_list = test_list[:int(args.use_sample)]
+            
+        num_test = len(test_list)        
 
-    if args.use_sample != 'all':
-        
-        test_list = test_list[:int(args.use_sample)]
-          
-    num_test = len(test_list)        
+        test_tensor = DynamicHeteroGraphTemporalSignal(test_list)
+        heteroData = test_tensor[0]
 
-    test_tensor = DynamicHeteroGraphTemporalSignal(test_list)
-    heteroData = test_tensor[0]
-
-    print('number of test runs', num_test)
+        print('number of test runs', num_test)
 
     print('************ setup model ***********')
 
@@ -293,6 +342,7 @@ if __name__=='__main__':
            # X_p = data.x_dict['joint'][:,:2].detach().numpy()
             traj.extraV_traj = []
             X = {k:v.clone() for k, v in data.x_dict.items()}
+            print("check",data.x_dict['joint'][0:5,:],data.x_dict['grain'][0:5,:])
             prev_X, prev_mask, prev_edge_index_dict = {k:v.clone() for k, v in X.items()}, {k:v.clone() for k, v in data['mask'].items()}, {k:v.clone() for k, v in data.edge_index_dict.items()}
             traj.GNN_update(0, X, data['mask'], True, data.edge_index_dict, args.compare)
             traj.check_planar(prev_edge_index_dict)
@@ -305,7 +355,8 @@ if __name__=='__main__':
             
             if args.growth_height>0:
                 traj.final_height = traj.ini_height + args.growth_height
-            traj.frames = int( (traj.final_height - traj.ini_height)/train_delta_z ) + 1-84
+            traj.frames = int( (traj.final_height - traj.ini_height)/train_delta_z ) + 1 -114  # mark that we only inference one step
+            print("FRAME", traj.frames)
             
 
             geometry_scaling = {'domain_offset':0, 'domain_factor':traj.lxd/traj.patch_size}
@@ -348,16 +399,22 @@ if __name__=='__main__':
             
                 
             data.to(device)
-            
-            
+            nucle_grain_list=[] 
+            nucle_grain_to_vet={}
             start_time = time.time()
+            timestep=0
             for frame in range(span, traj.frames, span):                
                 
                 print('******* prediction progress %1.2f/1.0 ********'%(frame/(traj.frames - 1)))
                 height = traj.ini_height + frame*train_delta_z
                 if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                    X = {k:v.clone() for k, v in data.x_dict.items()}
+                    traj.GNN_update(frame, X, data['mask'], True, data.edge_index_dict, args.compare)
                     traj.snap('snap_before')
-                traj.check_planar(data.edge_index_dict)
+                    
+                #traj.check_planar(data.edge_index_dict)
+                # timestep+=0.01
+                # traj.check_overlap(data.edge_index_dict, timestep)
                 
                 """
                 <1> combine predictions from regressor and classifier
@@ -387,6 +444,7 @@ if __name__=='__main__':
                 pred_c = Cmodel(data.x_dict, edge_index, edge_feature )
                 pred.update(pred_c)
 
+
                 
                 """
                 <2>  update node features
@@ -409,29 +467,42 @@ if __name__=='__main__':
                 if data.x_dict['grain'][0, 2] > train_frames/(train_frames + 1):
                     data.x_dict['grain'][:, 2] = train_frames/(train_frames + 1)         
                     data.x_dict['joint'][:, 2] = train_frames/(train_frames + 1)
-            
-                
                 """
                 <3> predict events and update features and connectivity
                     a. E_pp, E_pq
                     b. mask_p, mask_q
                 """            
-           
+
+                # if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                #     X = {k:v.clone() for k, v in data.x_dict.items()}
+                #     traj.GNN_update(frame, X, data['mask'], False, data.edge_index_dict, args.compare)
+                #     traj.snap('snap_between')
                 pred['grain_event'] = ((data['mask']['grain'][:,0]>0)&(pred['grain_area']<Rmodel.threshold)).nonzero().view(-1)
                 
                 pred['grain_event'] = pred['grain_event'][torch.argsort(pred['grain_area'][pred['grain_event']])]
                 if traj.BC == 'noflux': # the grain 0 here is boundary grain
                     pred['grain_event'] = pred['grain_event'][pred['grain_event']!=0]
                 
-                if args.save_fig>1 and frame%((traj.frames - 1)//(args.save_fig-1))==0:
-                    traj.edge_prob_dict=Cmodel.get_prob(data.edge_index_dict,pred)
-                    traj.elim_grain_to_vertices=Cmodel.get_elimin_grain_vertex(data.edge_index_dict,pred, geometry_scaling)
-                    traj.snap_classifer('class_before')
+                traj.edge_prob_dict=Cmodel.get_prob(data.edge_index_dict,pred)
+                traj.elim_grain_to_vertices=Cmodel.get_elimin_grain_vertex(data.edge_index_dict,pred, geometry_scaling)
+                traj.nucle_grain_to_vertices=Cmodel.get_nucle_grain_vertex(data.edge_index_dict,geometry_scaling, nucle_grain_list, nucle_grain_to_vet,grain_event_list)
+                # traj.snap_classifer('class_before', timestep)
                     # traj.junct_gradient_dict=Rmodel.get_gradient_dict(data.x_dict)
                     # traj.show_movement('vertex changes')    
                 nucleation_prob = args.nucleation_density*traj.lxd*traj.lxd*train_delta_z/data['mask']['joint'].sum()
                 print('nucleation probability for each junction: ', nucleation_prob)
-                data.x_dict, data.edge_index_dict, pairs = Cmodel.update(data.x_dict, data.edge_index_dict, data.edge_attr_dict, pred, data['mask'], geometry_scaling, nucleation_prob)
+                if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                    # X = {k:v.clone() for k, v in data.x_dict.items()}
+                    traj.GNN_update(frame, X, data['mask'], True, data.edge_index_dict, args.compare)
+                    traj.snap('snap_mid')
+                    traj.snap_nucle("check_1")
+                data.x_dict, data.edge_index_dict, pairs = Cmodel.update(data.x_dict, data.edge_index_dict, data.edge_attr_dict, pred, data['mask'], geometry_scaling, nucleation_prob, nucle_grain_list)
+                if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                    # X = {k:v.clone() for k, v in data.x_dict.items()}
+                    traj.GNN_update(frame, X, data['mask'], True, data.edge_index_dict, args.compare)
+                    # traj.deal_with_quadruple()
+                    traj.snap('snap_between')
+                    traj.snap_nucle("check_2")
                # pairs = pairs.detach().numpy()
                 if data.x_dict['grain'].size(dim=0) > traj.num_regions:
                     add_angles = torch.arccos(data.x_dict['grain'][traj.num_regions:, 5]).detach().numpy()
@@ -445,7 +516,11 @@ if __name__=='__main__':
 
                 topo = len(pred['grain_event'])>0 or len(pairs)>0               
                 print('topological changes happens: ', topo)
-                
+                # data.x_dict, data.edge_index_dict, pairs = Cmodel.update(data.x_dict, data.edge_index_dict, data.edge_attr_dict, pred, data['mask'], geometry_scaling, nucleation_prob, nucle_grain_list)
+                # if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                #     X = {k:v.clone() for k, v in data.x_dict.items()}
+                #     traj.GNN_update(frame, X, data['mask'], topo, data.edge_index_dict, args.compare)
+                #     traj.snap('snap_between')
                 
                 """
                 <4> evaluate
@@ -484,6 +559,35 @@ if __name__=='__main__':
                 if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
                     traj.snap('snap_mid')
                 traj.GNN_update(frame, X, data['mask'], topo, data.edge_index_dict, args.compare)
+                if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                    traj.snap('snap_second_stage')
+                    traj.snap_nucle('nucle_last_stage')
+
+                # if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                #     # traj.snap('snap_last_step')
+                #     # traj.add_polygon(center=(0.6, 0.65), radius=0.03, perturb_ratio=0.1)
+                #     traj.add_polygon(center=(0.592, 0.66), radius=0.03, perturb_ratio=0.2)
+                #     # traj.add_polygon(center=(0.74, 0.62), radius=0.03, perturb_ratio=0.1)
+                #     # traj.deal_with_quadruple()  #bug here
+                #     traj.update()
+                #     # traj.deal_with_quadruple()
+                #     traj.snap_nucle("check_1")
+                #     traj.consolidate_and_remove_best()
+                #     traj.snap_nucle("check_2")
+                #     # print(data.x_dict)
+                #     # print("length", data.x_dict["grain"].size(0))
+                #     # print("length", data.x_dict["joint"].size(0))
+                #     # print(data.edge_index_dict['joint', 'pull', 'grain'])
+                #     # print(data.edge_index_dict['joint', 'connect', 'joint'])
+                #     # data.x_dict,data.edge_index_dict= traj.add_nucleation_to_x(data.x_dict, data.edge_index_dict, data['mask'])
+                #     print("contains 211", traj.find_grains_containing_vertex(229))
+                #     traj.deal_with_quadruple()
+                #     traj.update()
+                #     data.x_dict,data.edge_index_dict= traj.add_nucleation_to_x(data.x_dict, data.edge_index_dict, data['mask'])
+                #     traj.snap_nucle("last_last")
+                #     print("contains 211", traj.find_grains_containing_vertex(229))
+                #     print("contains 211", traj.find_grains_containing_vertex(211))
+
                 
                 if hasattr(traj, 'train_test_frame_ratio'):
                     grain_event_truth = set.union(*traj.grain_events[:frame//traj.train_test_frame_ratio+1])
@@ -547,7 +651,7 @@ if __name__=='__main__':
                         p_err = sum([i[1] for i in layer_err_list])/len(layer_err_list)
                         p_err = int(np.round(p_err*100))
                         traj.save = 'seed' + str(grain_seed) + '_z' + str(height) + '_err' + str(p_err)+'_elimp'+str(right_pred_q)+'_t' + str(len(grain_event_truth)) + '.png'
-                        traj.show_data_struct()
+                        # traj.show_data_struct()
 
 
                 """
@@ -583,9 +687,25 @@ if __name__=='__main__':
                     data.edge_attr_dict[edge_type] = rel_loc
  
                 prev_X, prev_mask, prev_edge_index_dict = {k:v.clone() for k, v in X.items()}, {k:v.clone() for k, v in data['mask'].items()}, {k:v.clone() for k, v in data.edge_index_dict.items()}
-                if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
-                    traj.snap('snap_after')
-                
+                # if args.save_fig>1 and (frame)%((traj.frames - 1)//(args.save_fig-1))==0:
+                #     traj.snap('snap_after')
+
+            final_state = {
+                'x_dict': {k: v.clone().detach().cpu().numpy() for k, v in data.x_dict.items()},
+                'edge_index_dict': {k: v.clone().detach().cpu().numpy() for k, v in data.edge_index_dict.items()},
+                'edge_attr_dict': {k: v.clone().detach().cpu().numpy() for k, v in data.edge_attr_dict.items()},
+                'mask': {k: v.clone().detach().cpu().numpy() for k, v in data['mask'].items()},
+                'metadata': heteroData.metadata(),
+                'num_regions': traj.num_regions,
+                'theta_z': traj.theta_z,
+                'physical_params': traj.physical_params
+            }
+
+            # Save the final state
+            if not args.continue_from:
+                with open(f'final_state_seed_{traj.frames}_{grain_seed}.pkl', 'wb') as outp:
+                    dill.dump(final_state, outp)
+
             end_time = time.time()
             print('inference time for seed %d'%grain_seed, end_time - start_time)            
             

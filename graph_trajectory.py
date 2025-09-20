@@ -1055,6 +1055,7 @@ class graph_trajectory(graph):
             
             jj_edge = edge_index_dict['joint', 'connect', 'joint'].detach().numpy()
             gj_edge = edge_index_dict['grain', 'push', 'joint'].detach().numpy()
+            print(gj_edge)
             #print(jj_edge.shape, gj_edge.shape)
             
             self.vertex2joint = defaultdict(set)
@@ -1065,8 +1066,8 @@ class graph_trajectory(graph):
               #  if mask_g[grain]>0 and mask_j[joint]>0:
                     self.vertex2joint[joint].add(grain+1) 
 
-            for k, v in self.vertex2joint.items():
-                assert len(v)==3, (k, v)
+            # for k, v in self.vertex2joint.items():
+            #     assert len(v)==3, (k, v)     # Need to deal with quardple
             """
             print(len(jj_edge.T), len(gj_edge.T), len(self.vertex2joint))
             
@@ -1082,7 +1083,7 @@ class graph_trajectory(graph):
             
             
             self.joint2vertex = dict((tuple(sorted(v)), k) for k, v in self.vertex2joint.items())
-            self.vertex2joint = dict((v, k) for k, v in self.joint2vertex.items())
+            # self.vertex2joint = dict((v, k) for k, v in self.joint2vertex.items())
            # print(len(jj_edge[0]))
             self.edges = [[i,j] for i, j in jj_edge.T] #[[i,j] for i, j in jj_edge.T if mask_j[i] and mask_j[j]]
             

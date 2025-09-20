@@ -626,7 +626,20 @@ class GrainNN_classifier(torch.nn.Module):
             for s, d, p in zip(src, dst, prob)
         }
         return edge_prob_dict
-    
+
+    def get_nucle_grain_vertex(self,edge_index_dict, geometry_scaling, nucle_grain_list, nucle_grain_to_vet, grain_event_list):
+        E_pq = edge_index_dict['joint', 'pull', 'grain']
+        for grain in nucle_grain_list:
+            if grain not in geometry_scaling['active_grains']:continue
+            # if grain in grain_event_list:
+            #     nucle_grain_to_vet.pop(grain, None)
+            #     nucle_grain_list.remove(grain)
+            #     continue
+            Np = E_pq[0][(E_pq[1]==grain).nonzero().view(-1)]
+            vertex_set = set(Np.tolist())
+            nucle_grain_to_vet[grain]=vertex_set
+        return nucle_grain_to_vet
+
     def get_elimin_grain_vertex(self,edge_index_dict,y_dict,geometry_scaling):
         E_pp = edge_index_dict['joint', 'connect', 'joint']
         E_pq = edge_index_dict['joint', 'pull', 'grain']
@@ -662,7 +675,7 @@ class GrainNN_classifier(torch.nn.Module):
             # elim_edge = torch.cat(elim_edge)
             # print('grain', grain, 'edge',elim_edge, 'junction',Np)
 
-    def update(self, x_dict, edge_index_dict, edge_attr, y_dict, mask, geometry_scaling, nucleation_prob):            
+    def update(self, x_dict, edge_index_dict, edge_attr, y_dict, mask, geometry_scaling, nucleation_prob, nucle_grain_list):            
             
 
         E_pp = edge_index_dict['joint', 'connect', 'joint']
@@ -683,12 +696,17 @@ class GrainNN_classifier(torch.nn.Module):
         Grain elimination
         """
         self.elim = {'grain':[], 'joint':[]}
-        
+
+        # edges_with_v = E_pp[:, (E_pp[0] == 145) | (E_pp[1] == 145)]               # shape [2, K], where K is the number of matching edges
+
+        # print("Edges that contain", 145, ":\n", edges_with_v)
+
+
         unexpected_elim = []
-        
+        # print(y_dict['grain_event'])
         for grain in y_dict['grain_event']:
 
-           # print(grain)        
+            #print(grain)        
             if grain not in geometry_scaling['active_grains']: continue
    
             Np = E_pq[0][(E_pq[1]==grain).nonzero().view(-1)]
@@ -711,6 +729,8 @@ class GrainNN_classifier(torch.nn.Module):
                 if p1>p2:
                     p1, p2 = p2, p1
                 E_index = ((E_pp[0]==p1)&(E_pp[1]==p2)).nonzero().view(-1)
+                # if(len(E_index)==0):
+                #     E_index = ((E_pp[0]==p2)&(E_pp[1]==p1)).nonzero().view(-1)
                 if len(E_index)>0:
                     # print(p1, p2)
                     L2.append(E_index)
@@ -721,6 +741,11 @@ class GrainNN_classifier(torch.nn.Module):
                     elif Nq1[1] in Nq2:
                         Nq.append(Nq1[1])
                     else: 
+                    #     common = Nq1[torch.isin(Nq1, Nq2)]
+                    #     Nq.append(common)
+                    # # else:
+                    #     print(Nq1, Nq2)
+                    #     # 
                         raise KeyError
                    # print(p1, p2, Nq[-1])
                             
@@ -832,9 +857,9 @@ class GrainNN_classifier(torch.nn.Module):
                 theta_x, theta_z = torch.rand(2)*torch.pi/2 #torch.tensor([0.001,0.001]) #
                 center_coor = x_dict['joint'][junction, :2].clone()
                 j_nb0, j_nb1, j_nb2 = E_pp[1, (E_pp[0]==junction).nonzero().view(-1)]
-                len1=eucl_norm(x_dict['joint'][j_nb0,:2], center_coor)/2
-                len2=eucl_norm(x_dict['joint'][j_nb1,:2], center_coor)/2
-                len3=eucl_norm(x_dict['joint'][j_nb2,:2], center_coor)/2
+                len1=eucl_norm(x_dict['joint'][j_nb0,:2], center_coor)
+                len2=eucl_norm(x_dict['joint'][j_nb1,:2], center_coor)
+                len3=eucl_norm(x_dict['joint'][j_nb2,:2], center_coor)
                 intro_grain_area = (3 * torch.sqrt(torch.tensor(3)) / 4) * (len1 * len2 + len2 * len3 + len3 * len1)
                 # intro_grain_area = 0.004
                 # intro_pq_edge_len = torch.sqrt(intro_grain_area*4/3/torch.sqrt(torch.tensor(3)))
@@ -892,7 +917,7 @@ class GrainNN_classifier(torch.nn.Module):
                                                       [new_j1, new_j2, junction, new_j2, junction, new_j1]])), dim = 1)
                 E_pq = torch.cat((E_pq, torch.tensor([[junction, new_j1, new_j2, new_j1, new_j2, junction, new_j2, junction, new_j1], 
                                                       [num_grains, num_grains, num_grains, gr0, gr0, gr1, gr1, gr2, gr2]])), dim = 1)
-                
+                nucle_grain_list.append(num_grains)
                 num_grains += 1
                 num_junctions += 2
         
